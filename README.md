@@ -161,6 +161,45 @@ Estudiante de Ingeniería en IA - Universidad de A Coruña
 
 ---
 
-## 📄 Licencia
+## � TODO - Próximos Pasos
+
+### Fase 1: Setup y Datos ✅
+- [x] Crear estructura del proyecto
+- [x] Descargar dataset de Kaggle (`spain_energy_market.csv`)
+- [x] Subir a GitHub
+
+### Fase 2: Preprocesamiento (En progreso)
+- [ ] Instalar dependencias: `pip install -r requirements.txt`
+- [ ] Ejecutar preprocessing: `python src/data/preprocessing.py`
+- [ ] Verificar que se genera `data/processed/energy_processed.parquet`
+- [ ] Crear notebook EDA (`notebooks/01_eda.ipynb`) con visualizaciones
+
+### Fase 3: Modelos Baseline
+- [ ] Ejecutar baselines: `python src/models/baseline.py`
+- [ ] Documentar métricas de XGBoost y LightGBM
+- [ ] Comparar con predicción oficial de REE
+- [ ] Guardar resultados en `models/baseline_results.csv`
+
+### Fase 4: Deep Learning (TFT)
+- [ ] Entrenar TFT: `python src/models/tft.py`
+- [ ] Ajustar hiperparámetros si es necesario
+- [ ] Comparar TFT vs Baselines vs REE oficial
+- [ ] Generar gráficas de predicción
+
+### Fase 5: Documentación Final
+- [ ] Añadir gráficas de resultados al README
+- [ ] Crear notebook final con análisis completo
+- [ ] Escribir sección de "Resultados" con métricas finales
+- [ ] (Opcional) Añadir integración con WandB para tracking
+
+### Fase 6: Extras (Opcional)
+- [ ] Implementar N-BEATS como alternativa a TFT
+- [ ] Añadir datos meteorológicos externos (AEMET)
+- [ ] Crear API REST para predicciones en tiempo real
+- [ ] Desplegar en cloud (AWS/GCP)
+
+---
+
+## �📄 Licencia
 
 MIT License

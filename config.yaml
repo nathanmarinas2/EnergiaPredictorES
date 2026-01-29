@@ -1,0 +1,93 @@
+# Configuración del proyecto
+project:
+  name: "EnergiaPredictorES"
+  seed: 42
+  device: "auto"  # auto, cuda, cpu
+
+# Datos
+data:
+  raw_path: "data/raw"
+  processed_path: "data/processed"
+  kaggle_dataset: "nicholasjhana/energy-consumption-generation-prices-and-weather"
+  
+  # Variables objetivo
+  target: "total load actual"
+  
+  # Variables de entrada
+  features:
+    temporal:
+      - hour
+      - day_of_week
+      - month
+      - is_weekend
+      - is_holiday
+    weather:
+      - temp
+      - humidity
+      - wind_speed
+      - pressure
+    generation:
+      - generation_solar
+      - generation_wind_onshore
+      - generation_nuclear
+  
+  # Split temporal
+  train_end: "2017-12-31"
+  val_end: "2018-06-30"
+  test_start: "2018-07-01"
+
+# Modelo
+model:
+  # Baseline
+  baseline:
+    type: "xgboost"
+    params:
+      n_estimators: 500
+      max_depth: 8
+      learning_rate: 0.05
+  
+  # Temporal Fusion Transformer
+  tft:
+    hidden_size: 64
+    attention_head_size: 4
+    dropout: 0.1
+    hidden_continuous_size: 32
+    output_size: 7  # Cuantiles
+    learning_rate: 0.001
+    
+  # N-BEATS
+  nbeats:
+    num_stacks: 30
+    num_blocks: 1
+    num_layers: 4
+    layer_widths: 256
+    expansion_coefficient_dim: 5
+    
+# Entrenamiento
+training:
+  max_epochs: 100
+  batch_size: 128
+  early_stopping_patience: 10
+  gradient_clip_val: 0.1
+  
+  # Horizonte de predicción
+  prediction_horizon: 24  # horas
+  context_length: 168     # 1 semana de contexto
+
+# Evaluación
+evaluation:
+  metrics:
+    - mape
+    - rmse
+    - mae
+    - smape
+  
+  # Comparar con predicción oficial REE
+  compare_with_ree: true
+
+# Logging
+logging:
+  wandb:
+    project: "energia-predictor-es"
+    entity: null  # tu usuario de wandb
+  save_dir: "models"

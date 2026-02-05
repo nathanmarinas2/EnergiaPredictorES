@@ -82,7 +82,7 @@ models/*.csv
 models/tft_model/
 
 # Generated reports
-reports/figures/*.png
+# reports/figures/*.png
 reports/figures/*.pdf
 
 # OS

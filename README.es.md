@@ -89,6 +89,17 @@ Para respetar la naturaleza temporal del problema y evitar **data leakage**, se 
 
 ---
 
+---
+
+## Análisis Exploratorio de Datos (EDA)
+
+Antes de modelar, realizamos un análisis exhaustivo del comportamiento de la demanda eléctrica:
+
+![Análisis de Demanda](reports/figures/figure_0.png)
+*Figura 1: Descomposición de la demanda eléctrica: serie temporal, distribución y patrones promedio por hora y día.*
+
+---
+
 ## Metodología
 
 ### Preprocesamiento de Datos
@@ -200,6 +211,9 @@ Los modelos fueron evaluados en el conjunto de test independiente (últimos 6 me
 | TFT | 1523.15 | 1825.43 | 5.13 | 5.22 |
 | Seasonal Naive (h-168) | 2710.24 | 3224.62 | 9.52 | 9.57 |
 | Naive (h-24) | 2769.68 | 3370.80 | 9.79 | 9.75 |
+
+![Comparativa de Modelos](reports/figures/figure_1.png)
+*Figura 2: Comparativa de MAPE entre modelos y visualización de predicciones del modelo LightGBM vs Real.*
 
 ### Análisis de Resultados
 

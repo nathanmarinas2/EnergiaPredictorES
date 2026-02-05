@@ -67,19 +67,21 @@ venv.bak/
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# Data files (descargar manualmente)
+# Data files (download manually)
 data/raw/*.csv
 data/raw/*.zip
+data/raw/*.parquet
 data/processed/*.parquet
 data/processed/*.csv
 
-# Models (muy grandes para git)
+# Models (too large for git)
 models/*.pkl
 models/*.pt
 models/*.ckpt
+models/*.csv
 models/tft_model/
 
-# Reports generados
+# Generated reports
 reports/figures/*.png
 reports/figures/*.pdf
 
@@ -90,5 +92,5 @@ Thumbs.db
 # Weights & Biases
 wandb/
 
-# Kaggle credentials (NUNCA subir!)
+# Kaggle credentials (NEVER upload!)
 kaggle.json

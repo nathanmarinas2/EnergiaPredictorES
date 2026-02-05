@@ -89,6 +89,15 @@ To respect the temporal nature of the problem and avoid **data leakage**, a stri
 
 ---
 
+## Exploratory Data Analysis (EDA)
+
+Before modeling, we performed a comprehensive analysis of electricity demand behavior:
+
+![Demand Analysis](reports/figures/figure_0.png)
+*Figure 1: Electricity demand decomposition: time series, distribution, and average hourly/daily patterns.*
+
+---
+
 ## Methodology
 
 ### Data Preprocessing
@@ -200,6 +209,9 @@ Models were evaluated on the independent test set (last 6 months of the dataset)
 | TFT | 1523.15 | 1825.43 | 5.13 | 5.22 |
 | Seasonal Naive (h-168) | 2710.24 | 3224.62 | 9.52 | 9.57 |
 | Naive (h-24) | 2769.68 | 3370.80 | 9.79 | 9.75 |
+
+![Model Comparison](reports/figures/figure_1.png)
+*Figure 2: MAPE comparison across models and LightGBM vs Actual predictions visualization.*
 
 ### Results Analysis
 

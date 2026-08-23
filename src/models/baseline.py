@@ -59,24 +59,24 @@ def evaluate_predictions(y_true: np.ndarray, y_pred: np.ndarray, model_name: str
 
 
 def select_feature_columns(df: pd.DataFrame, target_col: str) -> list:
-    """Selecciona features numéricas disponibles en el momento de predecir.
+    """Selecciona solo variables disponibles al emitir un pronóstico diario.
 
-    Las diferencias y ratios del target se excluyen deliberadamente. Aunque
-    el preprocesador actual los calcula solo con historia, mantenerlos fuera
-    del modelo evita que un parquet antiguo con la implementación filtrada
-    vuelva a producir métricas contaminadas.
+    El escenario de producción es day-ahead: para predecir el día ``t`` solo
+    se conocen el calendario de ``t`` y la historia hasta ``t - 1``. Las
+    variables de mercado, generación y precios del mismo día se excluyen
+    aunque estén presentes en un parquet antiguo, porque podrían ser
+    observaciones posteriores al instante real de predicción.
     """
-    excluded = {
-        target_col,
-        'total load forecast',
-        'price actual',
-        'price day ahead',
+    safe_temporal = {
+        'hour', 'day_of_week', 'day_of_month', 'month', 'year',
+        'week_of_year', 'hour_sin', 'hour_cos', 'day_sin', 'day_cos',
+        'month_sin', 'month_cos', 'is_weekend', 'is_peak_morning',
+        'is_peak_evening', 'is_peak', 'is_holiday',
     }
     return [
         c for c in df.columns
-        if c not in excluded
-        and not c.startswith('load_diff_')
-        and not c.startswith('load_ratio_')
+        if c != target_col
+        and (c in safe_temporal or c.startswith('load_lag_') or c.startswith('load_rolling_'))
         and pd.api.types.is_numeric_dtype(df[c])
     ]
 

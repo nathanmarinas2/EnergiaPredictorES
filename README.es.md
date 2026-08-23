@@ -39,7 +39,7 @@ Se implementa un enfoque híbrido que combina:
 - **Modelos de Gradient Boosting (LightGBM, XGBoost):** Algoritmos de aprendizaje supervisado altamente efectivos para datos tabulares con características ingenierizadas manualmente.
 - **Temporal Fusion Transformer (TFT):** Arquitectura de Deep Learning de última generación diseñada específicamente para predicción de series temporales, que combina mecanismos de atención con redes LSTM para capturar dependencias temporales complejas.
 
-El modelo óptimo logra un error porcentual absoluto medio (MAPE) inferior al **1.2%** en el conjunto de test, demostrando la viabilidad del enfoque para aplicaciones en producción.
+La evaluación válida en modo **day-ahead estricto** obtiene un MAPE de **1.62%** con LightGBM y **1.73%** con XGBoost. Estas cifras usan únicamente calendario y demanda histórica disponible hasta el día anterior.
 
 ---
 
@@ -199,25 +199,36 @@ Se utilizaron cuatro métricas estándar para evaluar el rendimiento de los mode
 
 ### Comparativa de Modelos
 
-Los resultados anteriores se han retirado: la ejecución original incluía
-features derivadas del objetivo actual (`diff`/`ratio`) y no constituía una
-evaluación válida. Hay que volver a ejecutar el pipeline corregido para
-generar una tabla de métricas limpia.
+La evaluación de producción se ejecutó con `scripts/evaluate_production.py`
+usando `spain_energy_market.csv.zip` y una partición temporal fija:
 
-La figura anterior se conserva como histórico, pero no debe utilizarse como
-resultado válido hasta regenerarla con el pipeline corregido.
+- Train: 2014-01-13 a 2017-12-31.
+- Validación: 2018-01-01 a 2018-06-30.
+- Test: 2018-07-01 a 2018-12-30 (183 días).
+
+Resultados válidos del test:
+
+- LightGBM: MAE 453.10 MW, RMSE 767.34 MW, MAPE 1.62%.
+- XGBoost: MAE 483.75 MW, RMSE 808.61 MW, MAPE 1.73%.
+- Naive semanal: MAPE 4.49%.
+- Naive diario: MAPE 6.13%.
+
+Los modelos no reciben precios, energía asignada, generación ni congestiones
+del mismo día. El TFT debe volver a entrenarse con esta misma partición antes
+de compararlo con estos baselines.
 
 ### Estado de la evaluación
 
 Las métricas deben compararse solo cuando todos los modelos usan la misma
 frecuencia, horizonte, partición temporal y conjunto de features disponibles
-en el instante de predicción.
+en el instante de predicción. Las cifras antiguas se conservan únicamente
+como histórico y no son resultados de producción.
 
 ### Conclusión
 
-La implementación corregida es la referencia para comparar modelos. No se debe
-afirmar qué arquitectura es mejor hasta volver a ejecutar la evaluación sobre
-la fuente, frecuencia, horizonte y partición elegidos.
+La implementación corregida y el informe en `reports/production_results.csv`
+son la referencia actual para el escenario day-ahead. La comparación con TFT
+queda pendiente de una ejecución bajo la misma partición.
 
 ---
 

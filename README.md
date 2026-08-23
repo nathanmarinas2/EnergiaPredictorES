@@ -39,7 +39,7 @@ We implement a hybrid approach combining:
 - **Gradient Boosting Models (LightGBM, XGBoost):** Highly effective supervised learning algorithms for tabular data with manually engineered features.
 - **Temporal Fusion Transformer (TFT):** A state-of-the-art Deep Learning architecture specifically designed for time series forecasting, combining attention mechanisms with LSTM networks to capture complex temporal dependencies.
 
-The optimal model achieves a Mean Absolute Percentage Error (MAPE) of less than **1.2%** on the test set, demonstrating the viability of this approach for production applications.
+The valid **strict day-ahead** evaluation achieves a MAPE of **1.62%** with LightGBM and **1.73%** with XGBoost. These figures use only calendar variables and demand history available up to the previous day.
 
 ---
 
@@ -197,24 +197,35 @@ Four standard metrics were used to evaluate model performance:
 
 ### Model Comparison
 
-The previous results have been withdrawn: the original run included features
-derived from the current target (`diff`/`ratio`) and was not a valid evaluation.
-Run the corrected pipeline to generate a clean metrics table.
+The production evaluation was run with `scripts/evaluate_production.py` using
+`spain_energy_market.csv.zip` and a fixed temporal split:
 
-The previous figure is retained as historical output, but must be regenerated
-with the corrected pipeline before use.
+- Train: 2014-01-13 to 2017-12-31.
+- Validation: 2018-01-01 to 2018-06-30.
+- Test: 2018-07-01 to 2018-12-30 (183 days).
+
+Valid test results:
+
+- LightGBM: MAE 453.10 MW, RMSE 767.34 MW, MAPE 1.62%.
+- XGBoost: MAE 483.75 MW, RMSE 808.61 MW, MAPE 1.73%.
+- Weekly naive: MAPE 4.49%.
+- Daily naive: MAPE 6.13%.
+
+The models do not receive same-day prices, allocated energy, generation or
+congestion variables. TFT must be retrained with this same split before it is
+compared with these baselines.
 
 ### Evaluation status
 
-The previous comparison has been withdrawn: the original run included
-features derived from the current target (`diff`/`ratio`) and was not a valid
-evaluation. Run the corrected pipeline before reporting model performance.
+Metrics should only be compared when every model uses the same frequency,
+horizon, temporal split, and features available at prediction time. The old
+figures remain historical only and are not production results.
 
 ### Conclusion
 
-The corrected pipeline is the reference implementation for a clean
-comparison. Results should only be reported after rerunning it on the chosen
-source and a common test horizon.
+The corrected implementation and `reports/production_results.csv` are the
+current reference for the strict day-ahead scenario. Comparison with TFT is
+pending a run under the same split.
 
 ---
 

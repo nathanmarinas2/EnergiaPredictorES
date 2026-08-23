@@ -68,22 +68,41 @@ def compare_with_ree(df: pd.DataFrame, model_predictions: Dict[str, np.ndarray])
     print("📊 COMPARATIVA CON PREDICCIÓN OFICIAL REE")
     print("=" * 60)
     
-    # Valores reales
-    y_true = df['total load actual'].values
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise ValueError("df debe tener un DatetimeIndex para alinear las métricas")
+
+    # Valores reales, manteniendo el índice para evitar comparaciones por
+    # posición entre series temporalmente desalineadas.
+    y_true_series = df['total load actual']
     
     results = []
     
     # Predicción oficial REE
     if 'total load forecast' in df.columns:
-        y_ree = df['total load forecast'].values
-        ree_metrics = calculate_metrics(y_true, y_ree)
-        ree_metrics['Modelo'] = 'REE Oficial'
-        results.append(ree_metrics)
+        ree = df[['total load actual', 'total load forecast']].dropna()
+        if len(ree) == 0:
+            print("⚠️ REE Oficial omitida: no hay timestamps comunes válidos.")
+        else:
+            scale_ratio = np.median(np.abs(ree['total load forecast'])) / np.median(
+                np.abs(ree['total load actual'])
+            )
+            if not 0.25 <= scale_ratio <= 4.0:
+                print(
+                    "⚠️ REE Oficial omitida: escala incompatible "
+                    f"(ratio mediano={scale_ratio:.2f})."
+                )
+            else:
+                ree_metrics = calculate_metrics(
+                    ree['total load actual'].values,
+                    ree['total load forecast'].values,
+                )
+                ree_metrics['Modelo'] = 'REE Oficial'
+                results.append(ree_metrics)
     
     # Nuestros modelos
     for model_name, y_pred in model_predictions.items():
-        if len(y_pred) == len(y_true):
-            model_metrics = calculate_metrics(y_true, y_pred)
+        if len(y_pred) == len(y_true_series):
+            model_metrics = calculate_metrics(y_true_series.values, y_pred)
             model_metrics['Modelo'] = model_name
             results.append(model_metrics)
     
@@ -96,7 +115,7 @@ def compare_with_ree(df: pd.DataFrame, model_predictions: Dict[str, np.ndarray])
     print(results_df.to_string(index=False))
     
     # Calcular mejora vs REE
-    if 'total load forecast' in df.columns:
+    if 'REE Oficial' in results_df['Modelo'].values:
         ree_mape = results_df[results_df['Modelo'] == 'REE Oficial']['MAPE (%)'].values[0]
         best_mape = results_df.iloc[0]['MAPE (%)']
         best_model = results_df.iloc[0]['Modelo']
@@ -274,9 +293,9 @@ if __name__ == "__main__":
     # Filtrar test set
     test_df = df[df.index > '2018-06-30']
     
-    # Predicciones de ejemplo (lag 24h como baseline)
+    # Predicciones de ejemplo (día anterior como baseline)
     predictions = {
-        'Naive (h-24)': test_df['load_lag_24h'].values,
+        'Naive (día anterior)': test_df['load_lag_1day'].values,
     }
     
     generate_report(test_df, predictions)

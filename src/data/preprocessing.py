@@ -7,12 +7,65 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Tuple
-import holidays
+try:
+    import holidays
+except ImportError:  # Permite probar las funciones de lags sin la dependencia opcional.
+    holidays = None
 
 # Rutas
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 RAW_DIR = PROJECT_ROOT / "data" / "raw"
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
+
+
+def infer_time_frequency(index: pd.DatetimeIndex) -> str:
+    """Infiere si una serie regular representa horas o días.
+
+    El dataset ``spain_energy_market.csv`` contiene una observación diaria,
+    aunque sus timestamps estén a las 22:00/23:00. No se deben interpretar
+    esos saltos como horas consecutivas.
+    """
+    if len(index) < 2:
+        raise ValueError("Se necesitan al menos dos timestamps para inferir la frecuencia")
+
+    values = pd.DatetimeIndex(index).sort_values()
+    deltas = values.to_series().diff().dropna()
+    median_delta = deltas.median()
+
+    if median_delta <= pd.Timedelta(hours=2):
+        return "h"
+    if median_delta <= pd.Timedelta(days=2):
+        return "D"
+    raise ValueError(
+        "La serie temporal es demasiado irregular para construir lags fiables: "
+        f"salto mediano={median_delta}"
+    )
+
+
+def regularize_time_index(df: pd.DataFrame, frequency: str = None) -> pd.DataFrame:
+    """Ordena y regulariza el índice sin inventar valores del objetivo.
+
+    Para fuentes diarias normaliza las horas 22:00/23:00 y conserva una sola
+    observación por fecha. Los huecos se mantienen como NaN; se rellenan solo
+    covariables conocidas mediante forward-fill en el pipeline posterior.
+    """
+    df = df.copy()
+    df.index = pd.to_datetime(df.index)
+    if getattr(df.index, "tz", None) is not None:
+        df.index = df.index.tz_localize(None)
+    df = df.sort_index()
+
+    if df.index.has_duplicates:
+        df = df.groupby(level=0).first()
+
+    frequency = frequency or infer_time_frequency(df.index)
+    if frequency == "D":
+        df.index = df.index.normalize()
+        df = df.groupby(level=0).first().sort_index()
+        return df.asfreq("D")
+    if frequency == "h":
+        return df.asfreq("h")
+    raise ValueError(f"Frecuencia no soportada: {frequency}")
 
 
 def load_raw_data() -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -135,10 +188,15 @@ def clean_energy_data(df: pd.DataFrame) -> pd.DataFrame:
     cols_available = [c for c in cols_to_keep if c in df.columns]
     df = df[cols_available]
     
-    # Rellenar valores faltantes con interpolación
+    # Solo arrastramos información disponible del pasado. No interpolamos ni
+    # hacemos back-fill aquí porque eso puede usar observaciones futuras al
+    # construir el conjunto de entrenamiento.
     missing_before = df.isnull().sum().sum()
-    df = df.interpolate(method='time', limit=24)  # máximo 24h de interpolación
-    df = df.fillna(method='ffill').fillna(method='bfill')
+    fill_cols = [
+        c for c in df.columns
+        if c not in {'total load actual', 'total load forecast'}
+    ]
+    df[fill_cols] = df[fill_cols].ffill(limit=24)
     missing_after = df.isnull().sum().sum()
     
     print(f"   ✅ NaN antes: {missing_before:,}, después: {missing_after}")
@@ -167,9 +225,8 @@ def clean_weather_data(df: pd.DataFrame) -> pd.DataFrame:
     if df_agg['temp'].mean() > 100:  # Está en Kelvin
         df_agg['temp'] = df_agg['temp'] - 273.15
     
-    # Interpolación de valores faltantes
-    df_agg = df_agg.interpolate(method='time', limit=6)
-    df_agg = df_agg.fillna(method='ffill').fillna(method='bfill')
+    # Solo forward-fill: una predicción no puede conocer meteorología futura.
+    df_agg = df_agg.ffill(limit=6)
     
     print(f"   ✅ Weather agregado: {df_agg.shape[0]:,} timestamps")
     
@@ -207,6 +264,11 @@ def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     df['is_peak'] = (df['is_peak_morning'] | df['is_peak_evening']).astype(int)
     
     # Festivos españoles
+    if holidays is None:
+        raise ImportError(
+            "La librería 'holidays' es necesaria para crear is_holiday. "
+            "Instala las dependencias del proyecto."
+        )
     min_year = df.index.year.min()
     max_year = df.index.year.max()
     spain_holidays = holidays.Spain(years=range(min_year, max_year + 1))
@@ -218,34 +280,78 @@ def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_lag_features(df: pd.DataFrame, target_col: str = 'total load actual') -> pd.DataFrame:
-    """Añade features de lag y rolling para el target."""
+def add_lag_features(
+    df: pd.DataFrame,
+    target_col: str = 'total load actual',
+    frequency: str = None,
+) -> pd.DataFrame:
+    """Añade features calculables en el instante de predicción.
+
+    Todas las features derivadas del objetivo usan ``shift(1)`` o un lag
+    anterior. En particular, nunca se calcula una diferencia/ratio que
+    contenga ``y_t``: hacerlo permitiría reconstruir el objetivo directamente.
+    """
     print("📊 Añadiendo features de lag...")
-    
+
     df = df.copy()
-    
-    # Lags horarios
-    for lag in [1, 2, 3, 6, 12, 24, 48, 168]:  # 168 = 1 semana
-        df[f'load_lag_{lag}h'] = df[target_col].shift(lag)
-    
+    frequency = frequency or infer_time_frequency(df.index)
+    if frequency == "h":
+        day_period, week_period, unit = 24, 168, "h"
+    elif frequency == "D":
+        day_period, week_period, unit = 1, 7, "d"
+    else:
+        raise ValueError(f"Frecuencia no soportada: {frequency}")
+
+    # Lags de pasos, día y semana. Los nombres reflejan la frecuencia real.
+    lag_periods = {
+        "1step": 1,
+        "2step": 2,
+        "3step": 3,
+        "6step": 6,
+        "12step": 12,
+        "1day": day_period,
+        "2day": day_period * 2,
+        "1week": week_period,
+    }
+    for name, lag in lag_periods.items():
+        df[f'load_lag_{name}'] = df[target_col].shift(lag)
+
     # Rolling statistics
-    for window in [6, 12, 24, 168]:
-        df[f'load_rolling_mean_{window}h'] = df[target_col].shift(1).rolling(window).mean()
-        df[f'load_rolling_std_{window}h'] = df[target_col].shift(1).rolling(window).std()
-    
-    # Diferencias
-    df['load_diff_1h'] = df[target_col].diff(1)
-    df['load_diff_24h'] = df[target_col].diff(24)
-    df['load_diff_168h'] = df[target_col].diff(168)
-    
-    # Ratio respecto a hace 24h y 168h
-    df['load_ratio_24h'] = df[target_col] / df[target_col].shift(24)
-    df['load_ratio_168h'] = df[target_col] / df[target_col].shift(168)
-    
+    rolling_periods = {
+        "6step": 6,
+        "12step": 12,
+        "1day": day_period,
+        "1week": week_period,
+    }
+    history = df[target_col].shift(1)
+    for name, window in rolling_periods.items():
+        df[f'load_rolling_mean_{name}'] = history.rolling(window).mean()
+        df[f'load_rolling_std_{name}'] = history.rolling(window).std(ddof=0)
+
+    # Diferencias válidas: entre dos valores ya observados, nunca con y_t.
+    df['load_diff_1step'] = df[target_col].shift(1) - df[target_col].shift(2)
+    df['load_diff_1day'] = (
+        df[target_col].shift(day_period)
+        - df[target_col].shift(day_period + 1)
+    )
+    df['load_diff_1week'] = (
+        df[target_col].shift(week_period)
+        - df[target_col].shift(week_period + 1)
+    )
+
+    # Ratios entre valores históricos. Se conserva la información útil, pero
+    # nunca aparece el valor actual del objetivo en el numerador.
+    df['load_ratio_1day'] = (
+        df[target_col].shift(1) / df[target_col].shift(day_period + 1)
+    )
+    df['load_ratio_1week'] = (
+        df[target_col].shift(1) / df[target_col].shift(week_period + 1)
+    )
+
     # Reemplazar infinitos
     df = df.replace([np.inf, -np.inf], np.nan)
     
-    print(f"   ✅ Añadidas {len([c for c in df.columns if 'lag' in c or 'rolling' in c or 'diff' in c or 'ratio' in c])} features de lag")
+    print(f"   ✅ Añadidas {len([c for c in df.columns if 'lag' in c or 'rolling' in c or 'diff' in c or 'ratio' in c])} features de lag ({unit})")
     
     return df
 
@@ -291,8 +397,18 @@ def merge_and_process() -> pd.DataFrame:
         # Merge
         print("🔗 Combinando datasets...")
         df = energy_clean.join(weather_clean, how='left')
-        df = df.interpolate(method='time', limit=6)
     
+    # Regularizar la frecuencia antes de crear lags. Nunca rellenamos el
+    # objetivo con interpolación: los huecos del target se descartan después.
+    frequency = infer_time_frequency(df.index)
+    df = regularize_time_index(df, frequency)
+    numeric_cols = [
+        c for c in df.select_dtypes(include=[np.number]).columns
+        if c not in {'total load actual', 'total load forecast'}
+    ]
+    df[numeric_cols] = df[numeric_cols].ffill()
+    df = df.dropna(axis=1, how='all')
+
     print(f"   ✅ Dataset combinado: {df.shape[0]:,} filas, {df.shape[1]} columnas")
     
     # Verificar que tenemos target
@@ -305,13 +421,33 @@ def merge_and_process() -> pd.DataFrame:
     df = add_temporal_features(df)
     
     # Features de lag
-    df = add_lag_features(df)
-    
-    # Eliminar filas con NaN (primeras filas por los lags)
+    df = add_lag_features(df, frequency=frequency)
+
+    # Solo se eliminan filas que no pueden formar una observación válida del
+    # target o de su historial. No se usa dropna() sobre todas las columnas:
+    # eso descartaba la mayoría de días por columnas auxiliares incompletas.
+    lag_cols = [
+        c for c in df.columns
+        if c.startswith('load_lag_')
+        or c.startswith('load_rolling_')
+        or c.startswith('load_diff_')
+        or c.startswith('load_ratio_')
+    ]
     rows_before = len(df)
-    df = df.dropna()
+    df = df.dropna(subset=['total load actual', *lag_cols])
+
+    # Las columnas auxiliares que aún tienen NaN no se pueden pasar a los
+    # modelos sin imputación futura. Se descartan, conservando target y lags.
+    remaining_nan_cols = [
+        c for c in df.columns
+        if c != 'total load actual' and df[c].isna().any()
+    ]
+    if remaining_nan_cols:
+        print(f"🗑️  Eliminadas {len(remaining_nan_cols)} columnas con NaN residual")
+        df = df.drop(columns=remaining_nan_cols)
+
     rows_after = len(df)
-    print(f"🗑️  Eliminadas {rows_before - rows_after:,} filas con NaN (por lags)")
+    print(f"🗑️  Eliminadas {rows_before - rows_after:,} filas con NaN (por historial del target)")
     
     # Guardar
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)

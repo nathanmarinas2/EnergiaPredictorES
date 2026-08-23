@@ -22,7 +22,7 @@ from darts.metrics import mape, rmse, mae, smape
 
 import sys
 sys.path.append(str(Path(__file__).parent.parent.parent))
-from src.data.preprocessing import load_processed_data
+from src.data.preprocessing import infer_time_frequency, load_processed_data
 
 # Rutas
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -73,49 +73,41 @@ class EnergyTFT:
             'is_peak'
         ]
         
-        # Covariables pasadas (meteorología, precios)
-        past_cov_cols = [
-            'temp', 'humidity', 'wind_speed', 'pressure',
-            'generation solar', 'generation wind onshore', 'generation nuclear'
-        ]
-        
         # Filtrar columnas existentes
         future_cov_cols = [c for c in future_cov_cols if c in df.columns]
-        past_cov_cols = [c for c in past_cov_cols if c in df.columns]
+        # Las covariables meteorológicas/generación futuras no están
+        # disponibles en el momento real de pronosticar. Se excluyen para no
+        # evaluar el TFT con información observada del futuro.
+        frequency = infer_time_frequency(df.index)
+        self.data_frequency = frequency
         
         print(f"   Target: {target_col}")
         print(f"   Future covariates: {len(future_cov_cols)}")
-        print(f"   Past covariates: {len(past_cov_cols)}")
+        print("   Past covariates: 0 (se excluyen para evitar usar observaciones futuras)")
         
         # Crear TimeSeries
-        series_target = TimeSeries.from_dataframe(df, value_cols=target_col, freq='h')
-        series_future = TimeSeries.from_dataframe(df, value_cols=future_cov_cols, freq='h')
-        series_past = TimeSeries.from_dataframe(df, value_cols=past_cov_cols, freq='h')
+        series_target = TimeSeries.from_dataframe(df, value_cols=target_col, freq=frequency)
+        series_future = TimeSeries.from_dataframe(df, value_cols=future_cov_cols, freq=frequency)
         
         # Split temporal
+        step = pd.Timedelta(hours=1) if frequency == 'h' else pd.Timedelta(days=1)
         train_end = pd.Timestamp('2017-12-31')
         val_end = pd.Timestamp('2018-06-30')
+        val_start = train_end + step
+        test_start = val_end + step
         
         train_target = series_target.slice(series_target.start_time(), train_end)
-        val_target = series_target.slice(train_end, val_end)
-        test_target = series_target.slice(val_end, series_target.end_time())
+        val_target = series_target.slice(val_start, val_end)
+        test_target = series_target.slice(test_start, series_target.end_time())
         
         train_future = series_future.slice(series_future.start_time(), train_end)
-        val_future = series_future.slice(train_end, val_end)
-        test_future = series_future.slice(val_end, series_future.end_time())
-        
-        train_past = series_past.slice(series_past.start_time(), train_end)
-        val_past = series_past.slice(train_end, val_end)
-        test_past = series_past.slice(val_end, series_past.end_time())
+        val_future = series_future.slice(val_start, val_end)
+        test_future = series_future.slice(test_start, series_future.end_time())
         
         # Escalar
         train_target_scaled = self.scaler_target.fit_transform(train_target)
         val_target_scaled = self.scaler_target.transform(val_target)
         test_target_scaled = self.scaler_target.transform(test_target)
-        
-        train_past_scaled = self.scaler_covariates.fit_transform(train_past)
-        val_past_scaled = self.scaler_covariates.transform(val_past)
-        test_past_scaled = self.scaler_covariates.transform(test_past)
         
         print(f"   Train: {len(train_target)} timestamps")
         print(f"   Val: {len(val_target)} timestamps")
@@ -128,9 +120,6 @@ class EnergyTFT:
             'train_future': train_future,
             'val_future': val_future,
             'test_future': test_future,
-            'train_past': train_past_scaled,
-            'val_past': val_past_scaled,
-            'test_past': test_past_scaled,
             'test_target_original': test_target,
         }
     
@@ -175,8 +164,9 @@ class EnergyTFT:
         )
         
         print(f"   ✅ Modelo TFT creado")
-        print(f"   - Input length: {self.context_length}h")
-        print(f"   - Output length: {self.prediction_horizon}h")
+        unit = "h" if getattr(self, "data_frequency", "h") == "h" else "d"
+        print(f"   - Input length: {self.context_length}{unit}")
+        print(f"   - Output length: {self.prediction_horizon}{unit}")
         print(f"   - Hidden size: {self.hidden_size}")
         
     def train(self, data: Dict[str, Any]):
@@ -186,10 +176,8 @@ class EnergyTFT:
         self.model.fit(
             series=data['train_target'],
             future_covariates=data['train_future'],
-            past_covariates=data['train_past'],
             val_series=data['val_target'],
             val_future_covariates=data['val_future'],
-            val_past_covariates=data['val_past'],
             verbose=True,
         )
         
@@ -200,11 +188,14 @@ class EnergyTFT:
         if n is None:
             n = self.prediction_horizon
             
+        history = data['train_target'].append(data['val_target'])
+        future_covariates = data['train_future'].append(data['val_future']).append(
+            data['test_future']
+        )
         predictions = self.model.predict(
             n=n,
-            series=data['val_target'],
-            future_covariates=data['test_future'],
-            past_covariates=data['test_past'],
+            series=history,
+            future_covariates=future_covariates,
         )
         
         # Desescalar

@@ -3,6 +3,8 @@ Modelos baseline para predicción de demanda eléctrica.
 Incluye: Naive, Seasonal, ARIMA, XGBoost.
 """
 
+from __future__ import annotations
+
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -10,10 +12,15 @@ from typing import Tuple, Dict, Any
 import pickle
 from datetime import datetime
 
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-import xgboost as xgb
-import lightgbm as lgb
+try:
+    import xgboost as xgb
+except ImportError:
+    xgb = None
+
+try:
+    import lightgbm as lgb
+except ImportError:
+    lgb = None
 
 import sys
 sys.path.append(str(Path(__file__).parent.parent.parent))
@@ -43,12 +50,35 @@ def evaluate_predictions(y_true: np.ndarray, y_pred: np.ndarray, model_name: str
     """Calcula todas las métricas de evaluación."""
     metrics = {
         'model': model_name,
-        'mae': mean_absolute_error(y_true, y_pred),
-        'rmse': np.sqrt(mean_squared_error(y_true, y_pred)),
+        'mae': np.mean(np.abs(np.asarray(y_true) - np.asarray(y_pred))),
+        'rmse': np.sqrt(np.mean((np.asarray(y_true) - np.asarray(y_pred)) ** 2)),
         'mape': mape(y_true, y_pred),
         'smape': smape(y_true, y_pred),
     }
     return metrics
+
+
+def select_feature_columns(df: pd.DataFrame, target_col: str) -> list:
+    """Selecciona features numéricas disponibles en el momento de predecir.
+
+    Las diferencias y ratios del target se excluyen deliberadamente. Aunque
+    el preprocesador actual los calcula solo con historia, mantenerlos fuera
+    del modelo evita que un parquet antiguo con la implementación filtrada
+    vuelva a producir métricas contaminadas.
+    """
+    excluded = {
+        target_col,
+        'total load forecast',
+        'price actual',
+        'price day ahead',
+    }
+    return [
+        c for c in df.columns
+        if c not in excluded
+        and not c.startswith('load_diff_')
+        and not c.startswith('load_ratio_')
+        and pd.api.types.is_numeric_dtype(df[c])
+    ]
 
 
 def prepare_data(df: pd.DataFrame, target_col: str = 'total load actual') -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -71,24 +101,23 @@ def prepare_data(df: pd.DataFrame, target_col: str = 'total load actual') -> Tup
 
 
 def naive_forecast(train: pd.DataFrame, test: pd.DataFrame, target_col: str) -> np.ndarray:
-    """Predicción naive: último valor conocido."""
-    # Para cada punto en test, usar el valor de hace 24h
-    predictions = test[f'load_lag_24h'].values
+    """Predicción naive: valor observado un día antes."""
+    predictions = test['load_lag_1day'].values
     return predictions
 
 
 def seasonal_naive_forecast(train: pd.DataFrame, test: pd.DataFrame, target_col: str) -> np.ndarray:
-    """Predicción seasonal naive: mismo valor hace 1 semana."""
-    predictions = test[f'load_lag_168h'].values
+    """Predicción seasonal naive: mismo valor hace una semana."""
+    predictions = test['load_lag_1week'].values
     return predictions
 
 
 def train_xgboost(train: pd.DataFrame, val: pd.DataFrame, target_col: str) -> Tuple[xgb.XGBRegressor, list]:
     """Entrena modelo XGBoost."""
+    if xgb is None:
+        raise ImportError("Instala xgboost para entrenar el modelo XGBoost")
     
-    # Seleccionar features (excluir target y columnas relacionadas)
-    exclude_cols = [target_col, 'total load forecast', 'price actual', 'price day ahead']
-    feature_cols = [c for c in train.columns if c not in exclude_cols and not c.startswith('load_ratio')]
+    feature_cols = select_feature_columns(train, target_col)
     
     X_train = train[feature_cols]
     y_train = train[target_col]
@@ -119,9 +148,10 @@ def train_xgboost(train: pd.DataFrame, val: pd.DataFrame, target_col: str) -> Tu
 
 def train_lightgbm(train: pd.DataFrame, val: pd.DataFrame, target_col: str) -> Tuple[lgb.LGBMRegressor, list]:
     """Entrena modelo LightGBM."""
+    if lgb is None:
+        raise ImportError("Instala lightgbm para entrenar el modelo LightGBM")
     
-    exclude_cols = [target_col, 'total load forecast', 'price actual', 'price day ahead']
-    feature_cols = [c for c in train.columns if c not in exclude_cols and not c.startswith('load_ratio')]
+    feature_cols = select_feature_columns(train, target_col)
     
     X_train = train[feature_cols]
     y_train = train[target_col]
@@ -166,21 +196,32 @@ def run_baselines():
     
     results = []
     
-    # 1. Naive (lag 24h)
-    print("\n🔹 Naive (h-24)...")
+    # 1. Naive (día anterior)
+    print("\n🔹 Naive (día anterior)...")
     pred_naive = naive_forecast(train, test, target_col)
-    results.append(evaluate_predictions(y_test, pred_naive, 'Naive (h-24)'))
+    results.append(evaluate_predictions(y_test, pred_naive, 'Naive (día anterior)'))
     
-    # 2. Seasonal Naive (lag 168h)
-    print("🔹 Seasonal Naive (h-168)...")
+    # 2. Seasonal Naive (semana anterior)
+    print("🔹 Seasonal Naive (semana anterior)...")
     pred_seasonal = seasonal_naive_forecast(train, test, target_col)
-    results.append(evaluate_predictions(y_test, pred_seasonal, 'Seasonal Naive (h-168)'))
+    results.append(evaluate_predictions(y_test, pred_seasonal, 'Seasonal Naive (semana anterior)'))
     
-    # 3. Predicción oficial REE (si existe en los datos)
+    # 3. Predicción oficial REE solo si está alineada y en una escala plausible.
     if 'total load forecast' in test.columns:
-        print("🔹 REE Oficial...")
-        pred_ree = test['total load forecast'].values
-        results.append(evaluate_predictions(y_test, pred_ree, 'REE Oficial'))
+        forecast = test['total load forecast']
+        scale_ratio = np.nanmedian(np.abs(forecast.values)) / np.nanmedian(np.abs(y_test))
+        if (
+            forecast.notna().all()
+            and forecast.index.equals(test.index)
+            and 0.25 <= scale_ratio <= 4.0
+        ):
+            print("🔹 REE Oficial...")
+            results.append(evaluate_predictions(y_test, forecast.values, 'REE Oficial'))
+        else:
+            print(
+                "⚠️ REE Oficial omitida: forecast desalineado, incompleto o "
+                f"con escala incompatible (ratio mediano={scale_ratio:.2f})"
+            )
     
     # 4. XGBoost
     print("🔹 XGBoost...")
@@ -212,12 +253,16 @@ def run_baselines():
         model_path = MODELS_DIR / "baseline_xgboost.pkl"
         with open(model_path, 'wb') as f:
             pickle.dump({'model': xgb_model, 'features': xgb_features}, f)
-    else:
+    elif 'LightGBM' in best_model_name:
         model_path = MODELS_DIR / "baseline_lightgbm.pkl"
         with open(model_path, 'wb') as f:
             pickle.dump({'model': lgb_model, 'features': lgb_features}, f)
-    
-    print(f"\n✅ Mejor modelo guardado: {model_path}")
+    else:
+        model_path = None
+        print("ℹ️ El mejor resultado es un baseline; no se guarda como modelo ML.")
+
+    if model_path is not None:
+        print(f"\n✅ Mejor modelo guardado: {model_path}")
     
     # Guardar resultados
     results_path = MODELS_DIR / "baseline_results.csv"

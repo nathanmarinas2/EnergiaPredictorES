@@ -70,7 +70,7 @@ Data comes from the public Kaggle dataset [Energy Consumption, Generation, Price
 ### Time Period
 - **Start:** January 1, 2014
 - **End:** December 31, 2018
-- **Frequency:** Hourly (aggregated to daily for TFT)
+- **Frequency:** Depends on the source. `spain_energy_market.csv` is daily; hourly Kaggle/REE sources remain hourly.
 
 ### Main Variables
 | Variable | Description |
@@ -82,10 +82,7 @@ Data comes from the public Kaggle dataset [Energy Consumption, Generation, Price
 | `temp`, `humidity`, `pressure`, `wind_speed` | Meteorological variables |
 
 ### Data Partitioning
-To respect the temporal nature of the problem and avoid **data leakage**, a strict chronological partition was used:
-- **Training (Train):** 80% of data (first ~1252 points)
-- **Validation (Val):** 10% of data (~156 points)
-- **Test:** 10% of data (~157 points, last 6 months)
+To respect the temporal nature of the problem and avoid **data leakage**, the pipeline uses a strict chronological partition. Exact sizes depend on the source and are computed after frequency regularization without interpolating the target.
 
 ---
 
@@ -105,7 +102,7 @@ Before modeling, we performed a comprehensive analysis of electricity demand beh
 The preprocessing pipeline (`src/data/`) performs the following operations:
 
 1.  **Timestamp Cleaning:** Normalization of dates to correctly handle Daylight Saving Time changes in Spain.
-2.  **Missing Values Handling:** Linear interpolation to fill missing data, preserving temporal continuity.
+2.  **Missing Values Handling:** Forward-fill only for covariates; missing target values are not interpolated.
 3.  **Anomaly Detection:** Identification and filtering of outliers using Z-score statistical analysis.
 4.  **Feature Scaling:** StandardScaler normalization for Deep Learning models.
 
@@ -131,9 +128,9 @@ This approach avoids artificial discontinuity between, for example, 23:00 and 00
 
 #### Lag Features
 Historical values of the target variable were included:
-- `lag_1h`: Demand 1 hour ago.
-- `lag_24h`: Demand 24 hours ago (captures daily pattern).
-- `lag_168h`: Demand 168 hours ago (1 week, captures weekly pattern).
+- `load_lag_1step`: Demand from the previous observation.
+- `load_lag_1day`: Demand from the previous day.
+- `load_lag_1week`: Demand from the previous week.
 
 #### Rolling Window Statistics
 - Mean and standard deviation of demand in 6, 12, and 24-hour windows.
@@ -144,8 +141,8 @@ Historical values of the target variable were included:
 
 Two simple statistical baselines were implemented to establish a lower bound for acceptable performance:
 
-- **Naive (h-24):** Prediction based on the value observed 24 hours ago. Captures the daily pattern.
-- **Seasonal Naive (h-168):** Prediction based on the value observed 168 hours ago (1 week). Captures the weekly pattern.
+- **Naive (previous day):** Prediction based on the value observed the previous day.
+- **Seasonal Naive (previous week):** Prediction based on the value observed the previous week.
 
 #### 2. Gradient Boosting Models
 
@@ -200,42 +197,24 @@ Four standard metrics were used to evaluate model performance:
 
 ### Model Comparison
 
-Models were evaluated on the independent test set (last 6 months of the dataset):
+The previous results have been withdrawn: the original run included features
+derived from the current target (`diff`/`ratio`) and was not a valid evaluation.
+Run the corrected pipeline to generate a clean metrics table.
 
-| Model | MAE (MWh) | RMSE (MWh) | MAPE (%) | sMAPE (%) |
-|-------|-----------|------------|----------|-----------|
-| **LightGBM** | **325.21** | **435.55** | **1.15** | **1.15** |
-| XGBoost | 410.01 | 580.86 | 1.46 | 1.45 |
-| TFT | 1523.15 | 1825.43 | 5.13 | 5.22 |
-| Seasonal Naive (h-168) | 2710.24 | 3224.62 | 9.52 | 9.57 |
-| Naive (h-24) | 2769.68 | 3370.80 | 9.79 | 9.75 |
+The previous figure is retained as historical output, but must be regenerated
+with the corrected pipeline before use.
 
-![Model Comparison](reports/figures/figure_1.png)
-*Figure 2: MAPE comparison across models and LightGBM vs Actual predictions visualization.*
+### Evaluation status
 
-### Results Analysis
-
-#### General Performance
-The **LightGBM** model achieves the best overall performance with a MAPE of **1.15%**, followed by XGBoost with **1.46%**. Both models vastly outperform statistical baselines, which reach errors of approximately 9.5%.
-
-#### LightGBM vs XGBoost
-LightGBM outperforms XGBoost across all metrics, consistent with recent literature showing LightGBM's superiority on moderately sized datasets. Additionally, LightGBM exhibits significantly faster training times.
-
-#### Boosting Models vs TFT
-Counterintuitively, Gradient Boosting models outperform the Temporal Fusion Transformer in this case. This result can be attributed to several factors:
-
-1.  **Dataset Size:** TFT requires large volumes of data to learn complex patterns. With ~500 daily points, the model may be undertrained.
-2.  **Explicit Feature Engineering:** Boosting models benefit from manually engineered features (lags, cyclicals), while TFT attempts to learn these representations automatically.
-3.  **Prediction Horizon:** TFT is optimized for long-term multi-horizon forecasting, while boosting models work well for short-term point predictions.
-
-#### Improvement over Baseline
-Error reduction relative to the best baseline (Seasonal Naive) is:
-- **LightGBM:** 88% reduction in MAPE (from 9.52% to 1.15%)
-- **XGBoost:** 85% reduction in MAPE (from 9.52% to 1.46%)
+The previous comparison has been withdrawn: the original run included
+features derived from the current target (`diff`/`ratio`) and was not a valid
+evaluation. Run the corrected pipeline before reporting model performance.
 
 ### Conclusion
 
-For the problem of short-term electricity demand forecasting with structured data, **Gradient Boosting** models (especially LightGBM) enriched with strong temporal **Feature Engineering** prove to be extremely competitive, surpassing even more complex Deep Learning architectures like TFT.
+The corrected pipeline is the reference implementation for a clean
+comparison. Results should only be reported after rerunning it on the chosen
+source and a common test horizon.
 
 ---
 

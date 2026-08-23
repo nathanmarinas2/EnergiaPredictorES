@@ -70,7 +70,7 @@ Los datos provienen del dataset público de Kaggle [Energy Consumption, Generati
 ### Periodo Temporal
 - **Inicio:** 1 de enero de 2014
 - **Fin:** 31 de diciembre de 2018
-- **Frecuencia:** Horaria (agregada a diaria para el TFT)
+- **Frecuencia:** Depende de la fuente. `spain_energy_market.csv` es diaria; el dataset horario de Kaggle/API REE se mantiene horario.
 
 ### Variables Principales
 | Variable | Descripción |
@@ -82,10 +82,7 @@ Los datos provienen del dataset público de Kaggle [Energy Consumption, Generati
 | `temp`, `humidity`, `pressure`, `wind_speed` | Variables meteorológicas |
 
 ### Partición de Datos
-Para respetar la naturaleza temporal del problema y evitar **data leakage**, se utilizó una partición cronológica estricta:
-- **Entrenamiento (Train):** 80% de los datos (primeros ~1252 puntos)
-- **Validación (Val):** 10% de los datos (~156 puntos)
-- **Test:** 10% de los datos (~157 puntos, últimos 6 meses)
+Para respetar la naturaleza temporal del problema y evitar **data leakage**, el pipeline utiliza una partición cronológica estricta. Los tamaños exactos dependen de la fuente y se calculan después de regularizar la frecuencia, sin interpolar el objetivo.
 
 ---
 
@@ -107,7 +104,7 @@ Antes de modelar, realizamos un análisis exhaustivo del comportamiento de la de
 El pipeline de preprocesamiento (`src/data/`) realiza las siguientes operaciones:
 
 1.  **Limpieza de Timestamps:** Normalización de fechas para manejar correctamente los cambios de horario de verano/invierno en España.
-2.  **Tratamiento de Valores Nulos:** Interpolación lineal para rellenar datos faltantes, preservando la continuidad temporal.
+2.  **Tratamiento de Valores Nulos:** Forward-fill únicamente para covariables; los valores faltantes del objetivo no se interpolan.
 3.  **Detección de Anomalías:** Identificación y filtrado de outliers mediante análisis estadístico de Z-score.
 4.  **Escalado de Características:** Normalización StandardScaler para los modelos de Deep Learning.
 
@@ -133,9 +130,9 @@ Este enfoque evita la discontinuidad artificial entre, por ejemplo, las 23:00 y 
 
 #### Características de Rezago (Lag Features)
 Se incluyeron valores históricos de la variable objetivo:
-- `lag_1h`: Demanda 1 hora antes.
-- `lag_24h`: Demanda 24 horas antes (captura patrón diario).
-- `lag_168h`: Demanda 168 horas antes (1 semana, captura patrón semanal).
+- `load_lag_1step`: Demanda de la observación anterior.
+- `load_lag_1day`: Demanda del día anterior.
+- `load_lag_1week`: Demanda de la semana anterior.
 
 #### Estadísticas de Ventana Móvil
 - Media y desviación estándar de la demanda en ventanas de 6, 12 y 24 horas.
@@ -146,8 +143,8 @@ Se incluyeron valores históricos de la variable objetivo:
 
 Se implementaron dos baselines estadísticos simples para establecer un límite inferior de rendimiento aceptable:
 
-- **Naive (h-24):** Predicción basada en el valor observado hace 24 horas. Captura el patrón diario.
-- **Seasonal Naive (h-168):** Predicción basada en el valor observado hace 168 horas (1 semana). Captura el patrón semanal.
+- **Naive (día anterior):** Predicción basada en el valor observado el día anterior.
+- **Seasonal Naive (semana anterior):** Predicción basada en el valor observado la semana anterior.
 
 #### 2. Modelos de Gradient Boosting
 
@@ -202,42 +199,25 @@ Se utilizaron cuatro métricas estándar para evaluar el rendimiento de los mode
 
 ### Comparativa de Modelos
 
-Los modelos fueron evaluados en el conjunto de test independiente (últimos 6 meses del dataset):
+Los resultados anteriores se han retirado: la ejecución original incluía
+features derivadas del objetivo actual (`diff`/`ratio`) y no constituía una
+evaluación válida. Hay que volver a ejecutar el pipeline corregido para
+generar una tabla de métricas limpia.
 
-| Modelo | MAE (MWh) | RMSE (MWh) | MAPE (%) | sMAPE (%) |
-|--------|-----------|------------|----------|-----------|
-| **LightGBM** | **325.21** | **435.55** | **1.15** | **1.15** |
-| XGBoost | 410.01 | 580.86 | 1.46 | 1.45 |
-| TFT | 1523.15 | 1825.43 | 5.13 | 5.22 |
-| Seasonal Naive (h-168) | 2710.24 | 3224.62 | 9.52 | 9.57 |
-| Naive (h-24) | 2769.68 | 3370.80 | 9.79 | 9.75 |
+La figura anterior se conserva como histórico, pero no debe utilizarse como
+resultado válido hasta regenerarla con el pipeline corregido.
 
-![Comparativa de Modelos](reports/figures/figure_1.png)
-*Figura 2: Comparativa de MAPE entre modelos y visualización de predicciones del modelo LightGBM vs Real.*
+### Estado de la evaluación
 
-### Análisis de Resultados
-
-#### Rendimiento General
-El modelo **LightGBM** obtiene el mejor rendimiento global con un MAPE de **1.15%**, seguido por XGBoost con un **1.46%**. Ambos modelos superan ampliamente a los baselines estadísticos, que alcanzan errores de aproximadamente el 9.5%.
-
-#### LightGBM vs XGBoost
-LightGBM supera a XGBoost en todas las métricas, lo cual es consistente con la literatura reciente que muestra la superioridad de LightGBM en datasets de tamaño moderado. Adicionalmente, LightGBM presenta tiempos de entrenamiento significativamente menores.
-
-#### Modelos de Boosting vs TFT
-Contraintuitivamente, los modelos de Gradient Boosting superan al Temporal Fusion Transformer en este caso. Este resultado se puede atribuir a varios factores:
-
-1.  **Tamaño del dataset:** El TFT requiere grandes volúmenes de datos para aprender patrones complejos. Con ~500 puntos diarios, el modelo puede estar subentrenado.
-2.  **Feature Engineering explícito:** Los modelos de boosting se benefician de las características ingenierizadas manualmente (lags, cíclicas), mientras que el TFT intenta aprender estas representaciones automáticamente.
-3.  **Horizonte de predicción:** El TFT está optimizado para predicción multihorzionte a largo plazo, mientras que los modelos de boosting funcionan bien para predicciones puntuales a corto plazo.
-
-#### Mejora sobre Baseline
-La reducción del error respecto al mejor baseline (Seasonal Naive) es:
-- **LightGBM:** Reducción del 88% en MAPE (de 9.52% a 1.15%)
-- **XGBoost:** Reducción del 85% en MAPE (de 9.52% a 1.46%)
+Las métricas deben compararse solo cuando todos los modelos usan la misma
+frecuencia, horizonte, partición temporal y conjunto de features disponibles
+en el instante de predicción.
 
 ### Conclusión
 
-Para el problema de predicción de demanda eléctrica a corto plazo con datos estructurados, los modelos de **Gradient Boosting** (especialmente LightGBM) enriquecidos con un fuerte **Feature Engineering** temporal demuestran ser extremadamente competitivos, superando incluso a arquitecturas de Deep Learning más complejas como el TFT.
+La implementación corregida es la referencia para comparar modelos. No se debe
+afirmar qué arquitectura es mejor hasta volver a ejecutar la evaluación sobre
+la fuente, frecuencia, horizonte y partición elegidos.
 
 ---
 
